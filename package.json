@@ -1,0 +1,64 @@
+{
+    "name": "vscode-timelapse",
+    "displayName": "VS Code Timelapse",
+    "description": "Create timelapse videos of your coding sessions",
+    "version": "0.0.1",
+    "publisher": "your-name",
+    "engines": {
+        "vscode": "^1.85.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [],
+    "main": "./extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "extension.startTimelapse",
+                "title": "Start Timelapse Recording"
+            },
+            {
+                "command": "extension.stopTimelapse",
+                "title": "Stop Timelapse Recording"
+            }
+        ],
+        "configuration": {
+            "title": "Timelapse",
+            "properties": {
+                "timelapse.outputDirectory": {
+                    "type": "string",
+                    "default": "timelapse",
+                    "description": "Directory where timelapse files will be saved"
+                },
+                "timelapse.frameRate": {
+                    "type": "number",
+                    "default": 2,
+                    "description": "Number of screenshots per second"
+                },
+                "timelapse.videoFps": {
+                    "type": "number",
+                    "default": 10,
+                    "description": "Frames per second in the output video"
+                },
+                "timelapse.quality": {
+                    "type": "number",
+                    "default": 95,
+                    "description": "Quality of the captured screenshots (1-100)",
+                    "minimum": 1,
+                    "maximum": 100
+                }
+            }
+        }
+    },
+    "scripts": {
+        "lint": "eslint .",
+        "pretest": "npm run lint"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.85.0",
+        "@types/node": "18.x",
+        "eslint": "^8.54.0"
+    }
+}
+  
