@@ -5,7 +5,9 @@ import sys
 import os
 import json
 import time
+import signal
 import atexit
+import platform
 from datetime import datetime
 import mss
 import cv2
@@ -26,26 +28,41 @@ class TimelapseRecorder:
         self.multi_monitor = multi_monitor
         self.frame_count = 0
         self.should_stop = False
+        self.is_paused = False
         
         # Create directory for temporary frame storage
         self.temp_dir = os.path.join(output_dir, 'temp')
         os.makedirs(self.temp_dir, exist_ok=True)
         
-        # File used to control pause functionality
-        # Bug fix: Previously used signals which were unreliable on Windows
-        self.pause_file = os.path.join(self.temp_dir, '.pause')
-        if os.path.exists(self.pause_file):
-            os.remove(self.pause_file)
-
-        # File used to signal recording stop
-        # Bug fix: Replaced signal-based stopping with file-based approach
-        self.stop_file = os.path.join(self.temp_dir, '.stop')
-        if os.path.exists(self.stop_file):
-            os.remove(self.stop_file)
-
-        # Register cleanup function to ensure proper resource handling
-        # Bug fix: Added to ensure video creation even if process terminates unexpectedly
+        # Register signal handlers for stop
+        signal.signal(signal.SIGTERM, self.handle_stop)
+        signal.signal(signal.SIGINT, self.handle_stop)
+        
+        # On Unix-like systems, try to use SIGUSR1 for pause
+        if platform.system() != 'Windows':
+            try:
+                signal.signal(signal.SIGUSR1, self.handle_pause)
+            except AttributeError:
+                print("INFO:SIGUSR1 not available, using file-based pause control")
+        
+        # Register cleanup function
         atexit.register(self.cleanup)
+
+    def handle_stop(self, signum, frame):
+        """Signal handler for stop signals"""
+        print("\nINFO:Received stop signal")
+        self.should_stop = True
+
+    def handle_pause(self, signum, frame):
+        """Signal handler for pause signal"""
+        self.is_paused = not self.is_paused
+        state = "paused" if self.is_paused else "resumed"
+        print(f"\nINFO:Recording {state}")
+
+    def check_pause_file(self):
+        """Check for pause file in temp directory"""
+        pause_file = os.path.join(self.temp_dir, '.pause')
+        return os.path.exists(pause_file)
 
     def cleanup(self):
         """
@@ -55,39 +72,15 @@ class TimelapseRecorder:
         """
         print("\nINFO:Running cleanup...")
         
-        # Remove control files
-        if os.path.exists(self.pause_file):
-            try:
-                os.remove(self.pause_file)
-            except:
-                pass
-
-        if os.path.exists(self.stop_file):
-            try:
-                os.remove(self.stop_file)
-            except:
-                pass
-        
         # Create final video if frames were captured
         if self.frame_count > 0:
             print("\nINFO:Creating final video...")
             create_video(self.temp_dir, self.output_dir, self.video_fps)
 
-    def check_stop(self):
-        """
-        Checks for presence of stop file.
-        Part of the file-based control system that replaced signal handling.
-        Returns True if recording should stop.
-        """
-        if os.path.exists(self.stop_file):
-            print("\nINFO:Stop file detected")
-            return True
-        return False
-
     def record(self):
         """
         Main recording loop that captures screen frames at specified intervals.
-        Implements pause functionality through file checking.
+        Implements pause functionality through both signals and file-based control.
         Uses mss for efficient screen capture.
         """
         try:
@@ -103,10 +96,12 @@ class TimelapseRecorder:
                 print(f"INFO:Starting capture with frame rate {self.frame_rate} fps")
                 print(f"INFO:Saving frames to {self.temp_dir}")
 
-                while not self.check_stop():
-                    # Check for pause state
-                    is_paused = os.path.exists(self.pause_file)
-                    if is_paused:
+                while not self.should_stop:
+                    # Check both signal-based and file-based pause states
+                    if platform.system() == 'Windows':
+                        self.is_paused = self.check_pause_file()
+                    
+                    if self.is_paused:
                         time.sleep(0.1)  # Small delay while paused to reduce CPU usage
                         continue
 
@@ -246,31 +241,40 @@ def create_video(temp_dir, output_dir, fps):
         sys.exit(1)
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == '--create-video':
+        if len(sys.argv) < 5:
+            print("ERROR:Missing arguments for video creation")
+            print("Usage: python timelapse.py --create-video <frames_dir> <output_path> <fps>")
+            sys.exit(1)
+        
+        frames_dir = sys.argv[2]
+        output_path = sys.argv[3]
+        fps = float(sys.argv[4])
+        
+        output_dir = os.path.dirname(output_path)
+        create_video(frames_dir, output_dir, fps)
+        sys.exit(0)
+    
     if len(sys.argv) < 5:
         print("ERROR:Missing required arguments")
-        print("Usage: python timelapse.py output_dir frame_rate video_fps quality [capture_area] [--multi-monitor]")
+        print("Usage: python timelapse.py <output_dir> <frame_rate> <video_fps> <quality> [capture_area] [multi_monitor]")
         sys.exit(1)
 
     output_dir = sys.argv[1]
     frame_rate = float(sys.argv[2])
     video_fps = float(sys.argv[3])
     quality = int(sys.argv[4])
-
+    
     capture_area = None
-    multi_monitor = False
-
     if len(sys.argv) > 5:
-        if sys.argv[5] == '--multi-monitor':
-            multi_monitor = True
-        else:
-            try:
-                capture_area = json.loads(sys.argv[5])
-            except json.JSONDecodeError:
-                print("ERROR:Invalid capture area format")
-                sys.exit(1)
-
-    if len(sys.argv) > 6 and sys.argv[6] == '--multi-monitor':
-        multi_monitor = True
-
+        try:
+            capture_area = json.loads(sys.argv[5])
+        except:
+            pass
+            
+    multi_monitor = False
+    if len(sys.argv) > 6:
+        multi_monitor = sys.argv[6] == '--multi-monitor'
+    
     recorder = TimelapseRecorder(output_dir, frame_rate, video_fps, quality, capture_area, multi_monitor)
     recorder.record()

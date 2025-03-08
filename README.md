@@ -11,7 +11,11 @@ Create beautiful timelapses of your coding sessions in Visual Studio Code. This 
 - 🖥️ **Multi-Monitor Support**: Choose which monitor to record
 - 🎨 **Quality Settings**: Adjust frame rate and video quality
 - 🎬 **Multiple Video Formats**: Supports MP4, AVI with various codecs for maximum compatibility
-- 🔄 **Cross-Platform**: Works on Windows, macOS, and Linux
+- 🔄 **Platform Support**: Currently tested only on Windows. While the code includes support for macOS and Linux, it has not been thoroughly tested on these platforms.
+
+## Important Note
+
+This extension has been primarily developed and tested on Windows. While it includes code to support macOS and Linux, these platforms have not been thoroughly tested. Users on non-Windows platforms may encounter issues. I welcome feedback and contributions to improve cross-platform support.
 
 ## Requirements
 
@@ -21,10 +25,17 @@ Create beautiful timelapses of your coding sessions in Visual Studio Code. This 
   - `opencv-python` for video creation
   - `numpy` for image processing
 
+For other platforms (macOS, Linux):
+- Basic functionality should work, but extensive testing has not been performed
+- You may encounter platform-specific issues
+- Please report any issues you find to help improve cross-platform support
+
 ## Installation
 
 1. Install the extension from VS Code Marketplace
 2. Ensure Python is installed and available in your PATH
+   - On Windows, both `py` and `python` commands are supported
+   - On other platforms, `python3` and `python` commands will be attempted
 3. The extension will automatically handle Python package dependencies
 
 ## Usage
@@ -55,11 +66,11 @@ Create beautiful timelapses of your coding sessions in Visual Studio Code. This 
 ```
 
 - `outputDirectory`: Where to save videos (relative to workspace)
-- `frameRate`: How many frames to capture per second
-- `videoFps`: Frame rate of the output video
+- `frameRate`: How many frames to capture per second (recommended: 1-4 for normal coding, 5-10 for fast-paced sessions)
+- `videoFps`: Frame rate of the output video (recommended: 10-30)
 - `quality`: JPEG quality for frames (1-100)
-- `captureArea`: Specific screen area to capture (optional)
-- `multiMonitor`: Enable multi-monitor support
+- `captureArea`: Specific screen area to capture (optional, format: {"x": 0, "y": 0, "width": 1920, "height": 1080})
+- `multiMonitor`: Enable multi-monitor support (Note: thoroughly tested only on Windows)
 
 ## Technical Details
 
@@ -77,14 +88,6 @@ The extension uses a hybrid approach:
 - File-based control system for reliable process management
 - Extensive error handling and progress reporting
 - Automatic cleanup of temporary files
-
-### Bug Fixes and Improvements
-
-1. **Process Control**: Replaced signal-based stopping with file-based approach for better Windows compatibility
-2. **Video Creation**: Added multiple codec fallbacks to handle platform-specific availability
-3. **Python Detection**: Improved interpreter detection with multiple fallback methods
-4. **Error Handling**: Added extensive logging and user feedback
-5. **Resource Management**: Implemented proper cleanup through `atexit` handlers
 
 ## Contributing
 
