@@ -1,65 +1,103 @@
-# timelapse-code README
+# VS Code Timelapse
 
-This is the README for your extension "timelapse-code". After writing up a brief description, we recommend including the following sections.
+[Русская версия](README_RU.md)
+
+Create beautiful timelapses of your coding sessions in Visual Studio Code. This extension captures your screen at regular intervals and combines the frames into a video, allowing you to showcase your development process or create educational content.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- 🎥 **Screen Recording**: Capture your entire screen or a specific area
+- ⏯️ **Pause/Resume**: Temporarily pause recording when needed
+- 🖥️ **Multi-Monitor Support**: Choose which monitor to record
+- 🎨 **Quality Settings**: Adjust frame rate and video quality
+- 🎬 **Multiple Video Formats**: Supports MP4, AVI with various codecs for maximum compatibility
+- 🔄 **Cross-Platform**: Works on Windows, macOS, and Linux
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- Python 3.6 or higher
+- Required Python packages (automatically installed):
+  - `mss` for efficient screen capture
+  - `opencv-python` for video creation
+  - `numpy` for image processing
 
-## Extension Settings
+## Installation
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+1. Install the extension from VS Code Marketplace
+2. Ensure Python is installed and available in your PATH
+3. The extension will automatically handle Python package dependencies
 
-For example:
+## Usage
 
-This extension contributes the following settings:
+### Starting a Recording
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+1. Click the camera icon in the status bar or use the command palette:
+   - Command: `Start Timelapse Recording`
+   - Default location: `timelapse` folder in your workspace
 
-## Known Issues
+### During Recording
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- **Pause/Resume**: Use the command palette or click the status bar icon
+- **Stop Recording**: Use the command palette or click the status bar icon
+- Progress is shown in the status bar and output channel
 
-## Release Notes
+### Configuration
 
-Users appreciate release notes as you update your extension.
+```json
+{
+    "timelapse.outputDirectory": "timelapse",
+    "timelapse.frameRate": 2,
+    "timelapse.videoFps": 10,
+    "timelapse.quality": 95,
+    "timelapse.captureArea": null,
+    "timelapse.multiMonitor": false
+}
+```
 
-### 1.0.0
+- `outputDirectory`: Where to save videos (relative to workspace)
+- `frameRate`: How many frames to capture per second
+- `videoFps`: Frame rate of the output video
+- `quality`: JPEG quality for frames (1-100)
+- `captureArea`: Specific screen area to capture (optional)
+- `multiMonitor`: Enable multi-monitor support
 
-Initial release of ...
+## Technical Details
 
-### 1.0.1
+### Architecture
 
-Fixed issue #.
+The extension uses a hybrid approach:
+- TypeScript/Node.js for the VS Code integration
+- Python for efficient screen capture and video processing
+- File-based communication for reliable cross-platform operation
 
-### 1.1.0
+### Implementation Notes
 
-Added features X, Y, and Z.
+- Uses `mss` for fast screen capture with minimal CPU usage
+- OpenCV for video creation with multiple codec support
+- File-based control system for reliable process management
+- Extensive error handling and progress reporting
+- Automatic cleanup of temporary files
 
----
+### Bug Fixes and Improvements
 
-## Working with Markdown
+1. **Process Control**: Replaced signal-based stopping with file-based approach for better Windows compatibility
+2. **Video Creation**: Added multiple codec fallbacks to handle platform-specific availability
+3. **Python Detection**: Improved interpreter detection with multiple fallback methods
+4. **Error Handling**: Added extensive logging and user feedback
+5. **Resource Management**: Implemented proper cleanup through `atexit` handlers
 
-You can author your README using Visual Studio Code.  Here are some useful editor keyboard shortcuts:
+## Contributing
 
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux)
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux)
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
-## For more information
+## License
 
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-**Enjoy!**
+## Acknowledgments
+
+- [mss](https://github.com/BoboTiG/python-mss) for efficient screen capture
+- [OpenCV](https://opencv.org/) for video processing

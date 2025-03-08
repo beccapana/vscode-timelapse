@@ -10,8 +10,10 @@
     "categories": [
         "Other"
     ],
-    "activationEvents": [],
-    "main": "./extension.js",
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./out/extension.js",
     "contributes": {
         "commands": [
             {
@@ -21,6 +23,10 @@
             {
                 "command": "extension.stopTimelapse",
                 "title": "Stop Timelapse Recording"
+            },
+            {
+                "command": "extension.pauseTimelapse",
+                "title": "Pause/Resume Timelapse Recording"
             }
         ],
         "configuration": {
@@ -47,18 +53,58 @@
                     "description": "Quality of the captured screenshots (1-100)",
                     "minimum": 1,
                     "maximum": 100
+                },
+                "timelapse.captureArea": {
+                    "type": "object",
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "X coordinate of capture area"
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "Y coordinate of capture area"
+                        },
+                        "width": {
+                            "type": "number",
+                            "description": "Width of capture area"
+                        },
+                        "height": {
+                            "type": "number",
+                            "description": "Height of capture area"
+                        }
+                    },
+                    "description": "Area of screen to capture (null for full screen)"
+                },
+                "timelapse.multiMonitor": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Capture all monitors"
                 }
             }
         }
     },
     "scripts": {
-        "lint": "eslint .",
-        "pretest": "npm run lint"
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./ && npm run copy-python",
+        "copy-python": "copyfiles -f src/timelapse.py out/",
+        "watch": "tsc -watch -p ./",
+        "lint": "eslint . --ext .ts,.tsx",
+        "test": "node ./out/test/runTest.js",
+        "pretest": "npm run compile && npm run lint"
     },
     "devDependencies": {
+        "@types/glob": "^8.1.0",
+        "@types/mocha": "^10.0.1",
+        "@types/node": "16.x",
         "@types/vscode": "^1.85.0",
-        "@types/node": "18.x",
-        "eslint": "^8.54.0"
+        "@typescript-eslint/eslint-plugin": "^6.13.1",
+        "@typescript-eslint/parser": "^6.13.1",
+        "@vscode/test-electron": "^2.3.8",
+        "eslint": "^8.54.0",
+        "glob": "^10.3.10",
+        "mocha": "^10.2.0",
+        "typescript": "~5.3.3"
     }
 }
   
