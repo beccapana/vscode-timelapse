@@ -13,6 +13,11 @@ import mss
 import cv2
 import numpy as np
 
+# Add debug logging for MacOS
+IS_MACOS = platform.system() == 'Darwin'
+def debug_log(message):
+    print(f"DEBUG:{message}")
+
 class TimelapseRecorder:
     """
     Main class responsible for recording timelapses.
@@ -86,9 +91,18 @@ class TimelapseRecorder:
         try:
             # Initialize screen capture
             with mss.mss() as sct:
+                if IS_MACOS:
+                    debug_log(f"Available monitors: {sct.monitors}")
+                    debug_log(f"Primary monitor: {sct.monitors[0]}")
+                    debug_log(f"Using multi_monitor: {self.multi_monitor}")
+                    debug_log(f"Capture area: {self.capture_area}")
+
                 monitor = sct.monitors[0] if not self.multi_monitor else None
                 if self.capture_area:
                     monitor = self.capture_area
+
+                if IS_MACOS:
+                    debug_log(f"Selected monitor configuration: {monitor}")
 
                 last_capture = 0
                 capture_interval = 1.0 / self.frame_rate
@@ -97,38 +111,54 @@ class TimelapseRecorder:
                 print(f"INFO:Saving frames to {self.temp_dir}")
 
                 while not self.should_stop:
-                    # Check both signal-based and file-based pause states
-                    if platform.system() == 'Windows':
-                        self.is_paused = self.check_pause_file()
-                    
-                    if self.is_paused:
-                        time.sleep(0.1)  # Small delay while paused to reduce CPU usage
-                        continue
+                    try:
+                        # Check both signal-based and file-based pause states
+                        if platform.system() == 'Windows':
+                            self.is_paused = self.check_pause_file()
+                        
+                        if self.is_paused:
+                            time.sleep(0.1)  # Small delay while paused to reduce CPU usage
+                            continue
 
-                    current_time = time.time()
-                    if current_time - last_capture >= capture_interval:
-                        # Capture and save frame
-                        screenshot = sct.grab(monitor)
-                        
-                        # Convert to OpenCV format
-                        frame = np.array(screenshot)
-                        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-                        
-                        # Save frame with quality setting
-                        frame_path = os.path.join(self.temp_dir, f'frame_{self.frame_count:06d}.jpg')
-                        cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
-                        
-                        self.frame_count += 1
-                        last_capture = current_time
+                        current_time = time.time()
+                        if current_time - last_capture >= capture_interval:
+                            # Capture and save frame
+                            if IS_MACOS:
+                                debug_log("Attempting to capture frame...")
+                            
+                            screenshot = sct.grab(monitor)
+                            
+                            if IS_MACOS:
+                                debug_log(f"Frame captured. Size: {screenshot.width}x{screenshot.height}")
+                            
+                            # Convert to OpenCV format
+                            frame = np.array(screenshot)
+                            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                            
+                            # Save frame with quality setting
+                            frame_path = os.path.join(self.temp_dir, f'frame_{self.frame_count:06d}.jpg')
+                            cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+                            
+                            if IS_MACOS:
+                                debug_log(f"Frame saved to {frame_path}")
+                            
+                            self.frame_count += 1
+                            last_capture = current_time
 
-                        # Progress logging
-                        if self.frame_count % 10 == 0:
-                            print(f"INFO:Captured {self.frame_count} frames")
+                            # Progress logging
+                            if self.frame_count % 10 == 0:
+                                print(f"INFO:Captured {self.frame_count} frames")
+                    except Exception as e:
+                        if IS_MACOS:
+                            debug_log(f"Error during frame capture: {str(e)}")
+                        raise
 
             print("\nINFO:Recording stopped")
 
         except Exception as e:
             print(f"ERROR:{str(e)}")
+            if IS_MACOS:
+                debug_log(f"Stack trace: {sys.exc_info()}")
             sys.exit(1)
 
 def create_video(temp_dir, output_dir, fps):
