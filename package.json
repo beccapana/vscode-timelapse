@@ -75,6 +75,20 @@
                     "minimum": 1,
                     "maximum": 100
                 },
+                "timelapse.videoCodec": {
+                    "type": "string",
+                    "default": "H264",
+                    "enum": ["H265", "AV1", "H264", "mp4v", "XVID", "MJPG"],
+                    "description": "Codec to use for video creation. H265 and AV1 provide best compression, H264 is widely compatible. Order of fallback: H264 -> mp4v -> XVID -> MJPG",
+                    "enumDescriptions": [
+                        "H265 (HEVC) - Best compression and quality (if supported)",
+                        "AV1 - Modern codec with excellent compression (if supported)",
+                        "H264 - Good quality and wide compatibility",
+                        "mp4v - Standard MP4 codec, good compatibility",
+                        "XVID - Legacy AVI codec, widely supported",
+                        "MJPG - Motion JPEG, larger file size"
+                    ]
+                },
                 "timelapse.captureArea": {
                     "type": "object",
                     "properties": {

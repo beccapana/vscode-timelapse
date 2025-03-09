@@ -131,24 +131,28 @@ class TimelapseRecorder:
                             if IS_MACOS:
                                 debug_log(f"Frame captured. Size: {screenshot.width}x{screenshot.height}")
                             
-                            # Convert to numpy array with explicit bytes order
+                            # Convert to numpy array and handle color channels
                             frame = np.array(screenshot, dtype=np.uint8)
                             
                             if IS_MACOS:
                                 debug_log(f"Frame shape before conversion: {frame.shape}")
                                 debug_log(f"Frame data type: {frame.dtype}")
                             
-                            # Ensure we have the correct number of channels
-                            if len(frame.shape) == 3 and frame.shape[2] == 4:
-                                # Extract BGR channels (ignore alpha)
-                                frame = frame[:, :, :3]
-                                
-                                if IS_MACOS:
-                                    debug_log(f"Frame shape after channel extraction: {frame.shape}")
+                            # MSS captures in BGRA format, we need RGB for correct colors
+                            if len(frame.shape) == 3:
+                                if frame.shape[2] == 4:
+                                    # Convert BGRA to RGB
+                                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+                                elif frame.shape[2] == 3:
+                                    # Convert BGR to RGB
+                                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            
+                            if IS_MACOS:
+                                debug_log(f"Frame shape after conversion: {frame.shape}")
                             
                             # Save frame with quality setting
                             frame_path = os.path.join(self.temp_dir, f'frame_{self.frame_count:06d}.jpg')
-                            cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+                            cv2.imwrite(frame_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, self.quality])
                             
                             if IS_MACOS:
                                 debug_log(f"Frame saved to {frame_path}")
@@ -172,173 +176,167 @@ class TimelapseRecorder:
                 debug_log(f"Stack trace: {sys.exc_info()}")
             sys.exit(1)
 
-def create_video(temp_dir, output_dir, fps):
-    """
-    Creates video from captured frames.
-    Implements multiple codec fallbacks for maximum compatibility.
-    Added extensive error handling and progress reporting.
-    Bug fix: Added multiple codec attempts to handle codec availability issues across platforms.
-    Bug fix: Fixed color space handling to prevent green tint in videos.
-    """
+def create_video(frames_dir, output_path, fps):
+    """Creates video from captured frames using OpenCV"""
     try:
-        print("INFO:Starting video creation process...")
-        frames = sorted([f for f in os.listdir(temp_dir) if f.startswith('frame_')])
-        if not frames:
-            print("ERROR:No frames found")
-            return
+        # Get list of frame files
+        frame_files = sorted([f for f in os.listdir(frames_dir) if f.startswith('frame_') and f.endswith('.jpg')])
+        if not frame_files:
+            print("ERROR:No frames found for video creation")
+            return False
 
-        print(f"INFO:Found {len(frames)} frames")
-
-        # Read first frame to get dimensions
-        first_frame_path = os.path.join(temp_dir, frames[0])
-        print(f"INFO:Reading first frame from {first_frame_path}")
-        first_frame = cv2.imread(first_frame_path)
-        
+        # Get frame dimensions from first frame
+        first_frame = cv2.imread(os.path.join(frames_dir, frame_files[0]))
         if first_frame is None:
-            print(f"ERROR:Failed to read first frame from {first_frame_path}")
-            return
-            
-        height, width = first_frame.shape[:2]
-        print(f"INFO:Video dimensions will be {width}x{height}")
+            print("ERROR:Failed to read first frame")
+            return False
 
-        # Create video file
-        output_path = os.path.join(output_dir, 'timelapse.mp4')
-        print(f"INFO:Creating video at {output_path}")
+        height, width = first_frame.shape[:2]
+
+        # Get preferred codec from arguments, with fallbacks
+        preferred_codec = os.environ.get('TIMELAPSE_CODEC', 'H264')
         
-        # Try different codecs for compatibility
-        codecs = [
-            ('H264', '.mp4'),  # Try H264 first as it's most reliable
-            ('avc1', '.mp4'),  # AVC1 is also good for MP4
-            ('XVID', '.avi'),  # XVID is very reliable but creates larger files
-            ('MJPG', '.avi'),  # Motion JPEG as fallback
-            ('mp4v', '.mp4')   # MP4V as last resort
+        # Try different codecs in order of preference
+        codecs = []
+        
+        # Start with preferred codec
+        if preferred_codec in ['H265', 'AV1', 'H264', 'mp4v', 'XVID', 'MJPG']:
+            # Special handling for H265 and AV1
+            if preferred_codec == 'H265':
+                codec_options = [
+                    ('hevc', '.mp4'),  # HEVC codec
+                    ('hvc1', '.mp4'),  # Alternative HEVC FourCC
+                    ('x265', '.mp4')   # x265 implementation
+                ]
+            elif preferred_codec == 'AV1':
+                codec_options = [
+                    ('av01', '.mp4'),  # AV1 codec
+                    ('aom0', '.mp4')   # Alternative AV1 FourCC
+                ]
+            else:
+                ext = '.mp4' if preferred_codec in ['H264', 'mp4v'] else '.avi'
+                codec_options = [(preferred_codec, ext)]
+            
+            codecs.extend(codec_options)
+        
+        # Add fallback codecs (excluding the preferred one)
+        fallback_codecs = [
+            ('H264', '.mp4'),
+            ('mp4v', '.mp4'),
+            ('XVID', '.avi'),
+            ('MJPG', '.avi')
         ]
         
+        for codec, ext in fallback_codecs:
+            if codec != preferred_codec:
+                codecs.append((codec, ext))
+
         out = None
+        final_path = None
+
         for codec, ext in codecs:
             try:
-                print(f"INFO:Trying codec {codec}")
-                current_output = os.path.join(output_dir, f'timelapse{ext}')
                 fourcc = cv2.VideoWriter_fourcc(*codec)
+                test_path = output_path.replace('.mp4', ext)
                 
-                # For H264, try to set higher bitrate
-                if codec == 'H264':
-                    test_out = cv2.VideoWriter(current_output, fourcc, fps, (width, height), True)
-                    # Try to set bitrate if possible (not all OpenCV builds support this)
-                    try:
-                        test_out.set(cv2.VIDEOWRITER_PROP_QUALITY, 100)
-                    except:
-                        pass
+                # Special parameters for modern codecs
+                if codec in ['hevc', 'hvc1', 'x265', 'av01', 'aom0']:
+                    # Try to use higher quality settings for modern codecs
+                    test_writer = cv2.VideoWriter(test_path, fourcc, fps, (width, height), 
+                                                params=[
+                                                    cv2.VIDEOWRITER_PROP_QUALITY, 100,  # Highest quality
+                                                    cv2.VIDEOWRITER_PROP_BITRATE, 8000000  # 8 Mbps
+                                                ])
                 else:
-                    test_out = cv2.VideoWriter(current_output, fourcc, fps, (width, height))
+                    test_writer = cv2.VideoWriter(test_path, fourcc, fps, (width, height))
                 
-                if test_out.isOpened():
-                    out = test_out
-                    output_path = current_output
-                    print(f"INFO:Successfully created video writer with codec {codec}")
+                if test_writer.isOpened():
+                    out = test_writer
+                    final_path = test_path
+                    print(f"INFO:Successfully initialized video writer with codec {codec}")
                     break
                 else:
-                    print(f"INFO:Codec {codec} failed")
-                    test_out.release()
+                    test_writer.release()
             except Exception as e:
-                print(f"INFO:Error with codec {codec}: {str(e)}")
+                print(f"INFO:Codec {codec} failed: {str(e)}")
                 continue
 
         if out is None:
-            print("ERROR:Failed to create video with any codec")
-            return
+            print("ERROR:Failed to create video writer with any codec")
+            return False
 
-        total_frames = len(frames)
-        print(f"INFO:Starting to write {total_frames} frames to video")
-        
-        for i, frame_name in enumerate(frames):
-            frame_path = os.path.join(temp_dir, frame_name)
-            
-            # Read frame
-            frame = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
-            
-            if frame is None:
-                print(f"ERROR:Failed to read frame {frame_path}")
-                continue
-            
-            if IS_MACOS:
-                debug_log(f"Frame shape during video creation: {frame.shape}")
-            
-            # For certain codecs, ensure proper color handling
-            if codec == 'mp4v':
-                # MP4V sometimes needs explicit BGR->RGB->BGR conversion
-                frame = cv2.cvtColor(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), cv2.COLOR_RGB2BGR)
-            
-            # Write frame
-            out.write(frame)
-            
-            # Output progress
-            progress = int((i + 1) / total_frames * 100)
-            print(f"PROGRESS:{progress}")
+        # Write frames to video directly without color space conversion
+        total_frames = len(frame_files)
+        for i, frame_file in enumerate(frame_files, 1):
+            frame = cv2.imread(os.path.join(frames_dir, frame_file))
+            if frame is not None:
+                # Write frame directly without color conversion
+                out.write(frame)
+                progress = int((i / total_frames) * 100)
+                print(f"PROGRESS:{progress}")
 
         out.release()
-        print(f"INFO:Video saved to {output_path}")
-
-        # Verify video was created
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            print(f"INFO:Video file created successfully, size: {os.path.getsize(output_path)} bytes")
+        
+        # Verify the video was created
+        if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+            print(f"INFO:Video created successfully at {final_path}")
+            return True
         else:
             print("ERROR:Video file was not created or is empty")
-            return
-
-        print("INFO:Cleaning up temporary files...")
-        # Remove temporary files
-        for frame in frames:
-            try:
-                os.remove(os.path.join(temp_dir, frame))
-            except Exception as e:
-                print(f"WARNING:Failed to remove frame {frame}: {str(e)}")
-                
-        try:
-            os.rmdir(temp_dir)
-            print("INFO:Temporary directory removed")
-        except Exception as e:
-            print(f"WARNING:Failed to remove temp directory: {str(e)}")
-
+            return False
+            
     except Exception as e:
         print(f"ERROR:Failed to create video: {str(e)}")
-        sys.exit(1)
+        return False
 
-if __name__ == "__main__":
+def main():
+    """Main function handling command line arguments and program flow"""
     if len(sys.argv) > 1 and sys.argv[1] == '--create-video':
         if len(sys.argv) < 5:
-            print("ERROR:Missing arguments for video creation")
-            print("Usage: python timelapse.py --create-video <frames_dir> <output_path> <fps>")
+            print("ERROR:Not enough arguments for video creation")
+            print("Usage: timelapse.py --create-video <frames_dir> <output_path> <fps>")
             sys.exit(1)
         
         frames_dir = sys.argv[2]
         output_path = sys.argv[3]
-        fps = float(sys.argv[4])
+        fps = int(sys.argv[4])
         
-        output_dir = os.path.dirname(output_path)
-        create_video(frames_dir, output_dir, fps)
-        sys.exit(0)
-    
+        success = create_video(frames_dir, output_path, fps)
+        sys.exit(0 if success else 1)
+
     if len(sys.argv) < 5:
-        print("ERROR:Missing required arguments")
-        print("Usage: python timelapse.py <output_dir> <frame_rate> <video_fps> <quality> [capture_area] [multi_monitor]")
+        print("ERROR:Not enough arguments")
+        print("Usage: timelapse.py <output_dir> <frame_rate> <video_fps> <quality> [--codec CODEC] [capture_area_json] [--multi-monitor]")
         sys.exit(1)
 
     output_dir = sys.argv[1]
     frame_rate = float(sys.argv[2])
-    video_fps = float(sys.argv[3])
+    video_fps = int(sys.argv[3])
     quality = int(sys.argv[4])
-    
+
+    # Initialize variables with default values
     capture_area = None
-    if len(sys.argv) > 5:
-        try:
-            capture_area = json.loads(sys.argv[5])
-        except:
-            pass
-            
     multi_monitor = False
-    if len(sys.argv) > 6:
-        multi_monitor = sys.argv[6] == '--multi-monitor'
-    
+
+    # Parse additional arguments
+    i = 5
+    while i < len(sys.argv):
+        if sys.argv[i] == '--codec' and i + 1 < len(sys.argv):
+            os.environ['TIMELAPSE_CODEC'] = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == '--multi-monitor':
+            multi_monitor = True
+            i += 1
+        else:
+            try:
+                capture_area = json.loads(sys.argv[i])
+                i += 1
+            except json.JSONDecodeError:
+                print("ERROR:Invalid capture area JSON")
+                sys.exit(1)
+
     recorder = TimelapseRecorder(output_dir, frame_rate, video_fps, quality, capture_area, multi_monitor)
     recorder.record()
+
+if __name__ == '__main__':
+    main()

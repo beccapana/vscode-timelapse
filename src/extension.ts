@@ -18,6 +18,7 @@ interface TimelapseConfig {
     frameRate?: number;  // Deprecated
     videoFps: number;
     quality: number;
+    videoCodec: string;  // Added video codec setting
     captureArea?: {
         x: number;
         y: number;
@@ -117,7 +118,7 @@ class TimelapseRecorder {
                     process.on('error', () => resolve(false));
                     
                     process.stdout.on('data', () => {
-                        this.log(`Successfully found Python using command: ${cmd}`);
+                    this.log(`Successfully found Python using command: ${cmd}`);
                         resolve(true);
                     });
                     
@@ -170,7 +171,9 @@ class TimelapseRecorder {
             this.currentOutputDir!,
             (1 / config.frameInterval).toString(),  // Convert interval to rate for backward compatibility
             config.videoFps.toString(),
-            config.quality.toString()
+            config.quality.toString(),
+            '--codec',
+            config.videoCodec  // Pass codec to Python script
         ];
 
         if (config.captureArea) {
@@ -453,6 +456,44 @@ class TimelapseRecorder {
     }
 
     /**
+     * Gets the name of the current project
+     * Returns workspace name or folder name if available
+     */
+    private getProjectName(): string {
+        const workspaceFolder = this.getActiveWorkspaceFolder();
+        if (!workspaceFolder) {
+            return 'unnamed_project';
+        }
+
+        // Try to get workspace name first
+        const workspaceFile = vscode.workspace.workspaceFile;
+        if (workspaceFile) {
+            const workspaceName = path.basename(workspaceFile.fsPath, '.code-workspace');
+            if (workspaceName && workspaceName !== '.code-workspace') {
+                return workspaceName;
+            }
+        }
+
+        // Fallback to folder name
+        return path.basename(workspaceFolder.uri.fsPath);
+    }
+
+    /**
+     * Generates a unique timelapse filename for the current project
+     */
+    private async generateTimelapseFilename(baseDir: string, projectName: string): Promise<string> {
+        let counter = 1;
+        let filename: string;
+        
+        do {
+            filename = path.join(baseDir, `${projectName}${counter}.mp4`);
+            counter++;
+        } while (fs.existsSync(filename));
+        
+        return filename;
+    }
+
+    /**
      * Handles Python process termination
      * Bug fix: Added extended wait time and file size checking
      * Previously had issues with video creation timing out too quickly
@@ -491,7 +532,8 @@ class TimelapseRecorder {
 
             // Try to create video
             const tempDir = path.join(currentDir, 'temp');
-            const outputPath = path.join(currentDir, 'timelapse.mp4');
+            const projectName = this.getProjectName();
+            const outputPath = await this.generateTimelapseFilename(currentDir, projectName);
             const config = this.getConfiguration();
 
             const success = await this.createVideo(tempDir, outputPath, config.videoFps);
@@ -523,7 +565,7 @@ class TimelapseRecorder {
             this.cleanupTempDir(currentDir);
             // Reset state in case of error
             this.log('Ensuring all states are reset...');
-            this.resetState();
+        this.resetState();
             this.log('State reset completed');
         }
     }
@@ -599,6 +641,7 @@ class TimelapseRecorder {
 
         try {
             const config = this.getConfiguration();
+            const projectName = this.getProjectName();
             
             // Check for invalid configuration
             if (config.useCustomOutputDirectory && config.outputDirectory.toLowerCase() === 'timelapse') {
@@ -610,22 +653,26 @@ class TimelapseRecorder {
             // Determine output directory based on configuration
             if (config.useCustomOutputDirectory) {
                 // Normalize the path to handle Windows paths correctly
-                this.currentOutputDir = path.normalize(config.outputDirectory);
+                const baseDir = path.normalize(config.outputDirectory);
                 
                 // Validate that the path is absolute
-                if (!path.isAbsolute(this.currentOutputDir)) {
+                if (!path.isAbsolute(baseDir)) {
                     this.log('Invalid configuration: Custom output directory must be an absolute path', 'ERROR');
                     vscode.window.showErrorMessage('Custom output directory must be an absolute path (e.g., C:\\MyTimelapses or /home/user/timelapses)');
                     return;
                 }
                 
+                // Create project-specific subdirectory
+                this.currentOutputDir = path.join(baseDir, projectName);
                 this.log(`Using custom output directory: ${this.currentOutputDir}`);
             } else {
                 // Use relative path within workspace
                 const workspaceFolder = this.getActiveWorkspaceFolder();
-                this.currentOutputDir = workspaceFolder
-                    ? path.join(workspaceFolder.uri.fsPath, config.outputDirectory)
-                    : path.join(os.tmpdir(), 'vscode-timelapse', config.outputDirectory);
+                const baseDir = workspaceFolder
+                ? path.join(workspaceFolder.uri.fsPath, config.outputDirectory)
+                : path.join(os.tmpdir(), 'vscode-timelapse', config.outputDirectory);
+
+                this.currentOutputDir = baseDir;
                 this.log(`Using workspace-relative output directory: ${this.currentOutputDir}`);
             }
 
@@ -640,8 +687,8 @@ class TimelapseRecorder {
             vscode.window.showInformationMessage('Started timelapse recording');
         } catch (error) {
             if (error instanceof Error) {
-                this.log(`Error starting recording: ${error.message}`, 'ERROR');
-                vscode.window.showErrorMessage(`Failed to start recording: ${error.message}`);
+            this.log(`Error starting recording: ${error.message}`, 'ERROR');
+            vscode.window.showErrorMessage(`Failed to start recording: ${error.message}`);
             } else {
                 this.log('Error starting recording', 'ERROR');
                 vscode.window.showErrorMessage('Failed to start recording');
@@ -679,11 +726,11 @@ class TimelapseRecorder {
                 this.pythonProcess.kill('SIGUSR1');
             }
             
-            if (this.isPaused) {
-                this.statusBarItem.text = "$(debug-pause) Recording Paused";
+        if (this.isPaused) {
+            this.statusBarItem.text = "$(debug-pause) Recording Paused";
                 this.log('Recording paused');
-            } else {
-                this.statusBarItem.text = "$(loading) Recording...";
+        } else {
+            this.statusBarItem.text = "$(loading) Recording...";
                 this.log('Recording resumed');
             }
         } catch (error) {
@@ -712,13 +759,15 @@ class TimelapseRecorder {
         }
         
         return {
-            outputDirectory: config.get('outputDirectory', 'timelapse'),
-            useCustomOutputDirectory: config.get('useCustomOutputDirectory', false),
+            outputDirectory: config.get<string>('outputDirectory', 'timelapse'),
+            useCustomOutputDirectory: config.get<boolean>('useCustomOutputDirectory', false),
             frameInterval,
-            videoFps: config.get('videoFps', 10),
-            quality: config.get('quality', 95),
+            frameRate: config.get<number>('frameRate'),  // Deprecated
+            videoFps: config.get<number>('videoFps', 10),
+            quality: config.get<number>('quality', 95),
+            videoCodec: config.get<string>('videoCodec', 'H264'),  // Get codec from settings
             captureArea: config.get('captureArea'),
-            multiMonitor: config.get('multiMonitor', false)
+            multiMonitor: config.get<boolean>('multiMonitor', false)
         };
     }
 }

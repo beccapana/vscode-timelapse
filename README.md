@@ -40,6 +40,15 @@ For other platforms (macOS, Linux):
 
 ## Usage
 
+### Available Commands
+
+The following commands are available in the Command Palette (`Ctrl+Shift+P` or `Cmd+Shift+P`):
+
+- `Timelapse: Start Recording` - Start a new timelapse recording
+- `Timelapse: Stop Recording` - Stop the current recording and create video
+- `Timelapse: Pause/Resume Recording` - Temporarily pause or resume the current recording
+- `Timelapse: Open Settings` - Open VS Code settings for the extension
+
 ### Starting a Recording
 
 1. Click the camera icon in the status bar or use the command palette:
@@ -57,7 +66,8 @@ For other platforms (macOS, Linux):
 ```json
 {
     "timelapse.outputDirectory": "timelapse",
-    "timelapse.frameRate": 2,
+    "timelapse.frameInterval": 0.2,
+    "timelapse.frameRate": 5,
     "timelapse.videoFps": 10,
     "timelapse.quality": 95,
     "timelapse.captureArea": null,
@@ -66,11 +76,24 @@ For other platforms (macOS, Linux):
 ```
 
 - `outputDirectory`: Where to save videos (relative to workspace)
-- `frameRate`: How many frames to capture per second (recommended: 1-4 for normal coding, 5-10 for fast-paced sessions)
+- `frameInterval`: Interval between frames in seconds (min: 0.1s, max: 60s). Examples: 0.2 = one frame every 0.2 seconds, 2 = one frame every 2 seconds. Decimal numbers are supported.
+- `frameRate`: DEPRECATED: Use frameInterval instead. Number of screenshots per second (min: 0.1 fps, max: 30 fps). Example: 5 = five frames per second.
 - `videoFps`: Frame rate of the output video (recommended: 10-30)
 - `quality`: JPEG quality for frames (1-100)
 - `captureArea`: Specific screen area to capture (optional, format: {"x": 0, "y": 0, "width": 1920, "height": 1080})
 - `multiMonitor`: Enable multi-monitor support (Note: thoroughly tested only on Windows)
+
+### Video Codecs
+
+The extension supports multiple video codecs for maximum compatibility and quality:
+
+- H265 (HEVC) - High efficiency with smaller file sizes
+- AV1 - Next-generation codec with excellent compression
+- H264 - Standard codec with wide compatibility
+- XVID - Legacy codec for maximum compatibility
+- MJPG - Fallback codec
+
+The extension will automatically try to use the best available codec in the following order: H265 > AV1 > H264 > XVID > MJPG.
 
 ## Technical Details
 
