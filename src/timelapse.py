@@ -131,9 +131,20 @@ class TimelapseRecorder:
                             if IS_MACOS:
                                 debug_log(f"Frame captured. Size: {screenshot.width}x{screenshot.height}")
                             
-                            # Convert to OpenCV format
-                            frame = np.array(screenshot)
-                            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                            # Convert to numpy array with explicit bytes order
+                            frame = np.array(screenshot, dtype=np.uint8)
+                            
+                            if IS_MACOS:
+                                debug_log(f"Frame shape before conversion: {frame.shape}")
+                                debug_log(f"Frame data type: {frame.dtype}")
+                            
+                            # Ensure we have the correct number of channels
+                            if len(frame.shape) == 3 and frame.shape[2] == 4:
+                                # Extract BGR channels (ignore alpha)
+                                frame = frame[:, :, :3]
+                                
+                                if IS_MACOS:
+                                    debug_log(f"Frame shape after channel extraction: {frame.shape}")
                             
                             # Save frame with quality setting
                             frame_path = os.path.join(self.temp_dir, f'frame_{self.frame_count:06d}.jpg')
@@ -167,6 +178,7 @@ def create_video(temp_dir, output_dir, fps):
     Implements multiple codec fallbacks for maximum compatibility.
     Added extensive error handling and progress reporting.
     Bug fix: Added multiple codec attempts to handle codec availability issues across platforms.
+    Bug fix: Fixed color space handling to prevent green tint in videos.
     """
     try:
         print("INFO:Starting video creation process...")
@@ -195,10 +207,11 @@ def create_video(temp_dir, output_dir, fps):
         
         # Try different codecs for compatibility
         codecs = [
-            ('mp4v', '.mp4'),
-            ('avc1', '.mp4'),
-            ('H264', '.mp4'),
-            ('XVID', '.avi')
+            ('H264', '.mp4'),  # Try H264 first as it's most reliable
+            ('avc1', '.mp4'),  # AVC1 is also good for MP4
+            ('XVID', '.avi'),  # XVID is very reliable but creates larger files
+            ('MJPG', '.avi'),  # Motion JPEG as fallback
+            ('mp4v', '.mp4')   # MP4V as last resort
         ]
         
         out = None
@@ -207,7 +220,17 @@ def create_video(temp_dir, output_dir, fps):
                 print(f"INFO:Trying codec {codec}")
                 current_output = os.path.join(output_dir, f'timelapse{ext}')
                 fourcc = cv2.VideoWriter_fourcc(*codec)
-                test_out = cv2.VideoWriter(current_output, fourcc, fps, (width, height))
+                
+                # For H264, try to set higher bitrate
+                if codec == 'H264':
+                    test_out = cv2.VideoWriter(current_output, fourcc, fps, (width, height), True)
+                    # Try to set bitrate if possible (not all OpenCV builds support this)
+                    try:
+                        test_out.set(cv2.VIDEOWRITER_PROP_QUALITY, 100)
+                    except:
+                        pass
+                else:
+                    test_out = cv2.VideoWriter(current_output, fourcc, fps, (width, height))
                 
                 if test_out.isOpened():
                     out = test_out
@@ -230,12 +253,23 @@ def create_video(temp_dir, output_dir, fps):
         
         for i, frame_name in enumerate(frames):
             frame_path = os.path.join(temp_dir, frame_name)
-            frame = cv2.imread(frame_path)
+            
+            # Read frame
+            frame = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
             
             if frame is None:
                 print(f"ERROR:Failed to read frame {frame_path}")
                 continue
-                
+            
+            if IS_MACOS:
+                debug_log(f"Frame shape during video creation: {frame.shape}")
+            
+            # For certain codecs, ensure proper color handling
+            if codec == 'mp4v':
+                # MP4V sometimes needs explicit BGR->RGB->BGR conversion
+                frame = cv2.cvtColor(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), cv2.COLOR_RGB2BGR)
+            
+            # Write frame
             out.write(frame)
             
             # Output progress
