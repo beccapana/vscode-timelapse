@@ -13,7 +13,9 @@ import * as fs from 'fs';
  */
 interface TimelapseConfig {
     outputDirectory: string;
-    frameRate: number;
+    useCustomOutputDirectory: boolean;
+    frameInterval: number;
+    frameRate?: number;  // Deprecated
     videoFps: number;
     quality: number;
     captureArea?: {
@@ -31,7 +33,7 @@ interface TimelapseConfig {
  */
 class TimelapseRecorder {
     private pythonProcess: ChildProcess | null = null;
-    private statusBarItem: vscode.StatusBarItem;
+    public statusBarItem: vscode.StatusBarItem;
     private outputChannel: vscode.OutputChannel;
     private currentOutputDir: string | null = null;
     private isPaused: boolean = false;
@@ -166,7 +168,7 @@ class TimelapseRecorder {
         const args = [
             scriptPath,
             this.currentOutputDir!,
-            config.frameRate.toString(),
+            (1 / config.frameInterval).toString(),  // Convert interval to rate for backward compatibility
             config.videoFps.toString(),
             config.quality.toString()
         ];
@@ -597,12 +599,37 @@ class TimelapseRecorder {
 
         try {
             const config = this.getConfiguration();
-            const workspaceFolder = this.getActiveWorkspaceFolder();
             
-            this.currentOutputDir = workspaceFolder
-                ? path.join(workspaceFolder.uri.fsPath, config.outputDirectory)
-                : path.join(os.tmpdir(), 'vscode-timelapse', config.outputDirectory);
+            // Check for invalid configuration
+            if (config.useCustomOutputDirectory && config.outputDirectory.toLowerCase() === 'timelapse') {
+                this.log('Invalid configuration: Cannot use "timelapse" as output directory when custom directory is enabled', 'ERROR');
+                vscode.window.showErrorMessage('Invalid configuration: When using a custom output directory, you cannot use "timelapse" as the directory name. Please choose a different name or disable custom directory option.');
+                return;
+            }
+            
+            // Determine output directory based on configuration
+            if (config.useCustomOutputDirectory) {
+                // Normalize the path to handle Windows paths correctly
+                this.currentOutputDir = path.normalize(config.outputDirectory);
+                
+                // Validate that the path is absolute
+                if (!path.isAbsolute(this.currentOutputDir)) {
+                    this.log('Invalid configuration: Custom output directory must be an absolute path', 'ERROR');
+                    vscode.window.showErrorMessage('Custom output directory must be an absolute path (e.g., C:\\MyTimelapses or /home/user/timelapses)');
+                    return;
+                }
+                
+                this.log(`Using custom output directory: ${this.currentOutputDir}`);
+            } else {
+                // Use relative path within workspace
+                const workspaceFolder = this.getActiveWorkspaceFolder();
+                this.currentOutputDir = workspaceFolder
+                    ? path.join(workspaceFolder.uri.fsPath, config.outputDirectory)
+                    : path.join(os.tmpdir(), 'vscode-timelapse', config.outputDirectory);
+                this.log(`Using workspace-relative output directory: ${this.currentOutputDir}`);
+            }
 
+            // Ensure the output directory exists
             this.log(`Setting up output directory: ${this.currentOutputDir}`);
             fs.mkdirSync(this.currentOutputDir, { recursive: true });
             
@@ -673,9 +700,21 @@ class TimelapseRecorder {
      */
     private getConfiguration(): TimelapseConfig {
         const config = vscode.workspace.getConfiguration('timelapse');
+        
+        // Get frameInterval or convert from deprecated frameRate
+        let frameInterval = config.get<number>('frameInterval', 0.2);  // Default: 5 fps = 0.2 seconds interval
+        const frameRate = config.get<number>('frameRate');
+        
+        if (typeof frameRate === 'number' && !config.get('frameInterval')) {
+            // Convert frameRate to frameInterval
+            frameInterval = 1 / frameRate;
+            this.log('Warning: Using deprecated frameRate setting. Please use frameInterval instead (frameInterval = 1/frameRate).', 'ERROR');
+        }
+        
         return {
             outputDirectory: config.get('outputDirectory', 'timelapse'),
-            frameRate: config.get('frameRate', 2),
+            useCustomOutputDirectory: config.get('useCustomOutputDirectory', false),
+            frameInterval,
             videoFps: config.get('videoFps', 10),
             quality: config.get('quality', 95),
             captureArea: config.get('captureArea'),
@@ -696,8 +735,15 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('extension.startTimelapse', () => recorder.startRecording()),
         vscode.commands.registerCommand('extension.stopTimelapse', () => recorder.stopRecording()),
-        vscode.commands.registerCommand('extension.pauseTimelapse', () => recorder.togglePause())
+        vscode.commands.registerCommand('extension.pauseTimelapse', () => recorder.togglePause()),
+        vscode.commands.registerCommand('extension.openTimelapseSettings', () => {
+            // Open VS Code settings with timelapse settings pre-filtered
+            vscode.commands.executeCommand('workbench.action.openSettings', 'timelapse');
+        })
     );
+
+    // Initialize status bar
+    recorder.statusBarItem.show();
 }
 
 /**

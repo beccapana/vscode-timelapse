@@ -27,30 +27,51 @@
             {
                 "command": "extension.pauseTimelapse",
                 "title": "Pause/Resume Timelapse Recording"
+            },
+            {
+                "command": "extension.openTimelapseSettings",
+                "title": "Open Timelapse Settings"
             }
         ],
         "configuration": {
             "title": "Timelapse",
             "properties": {
+                "timelapse.useCustomOutputDirectory": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When enabled, allows you to specify a custom output directory. When disabled, files will be saved in the workspace root."
+                },
                 "timelapse.outputDirectory": {
                     "type": "string",
                     "default": "timelapse",
-                    "description": "Directory where timelapse files will be saved"
+                    "description": "Directory where timelapse files will be saved. If 'Use Custom Output Directory' is enabled, this can be an absolute path. Otherwise, it will be relative to workspace root."
+                },
+                "timelapse.frameInterval": {
+                    "type": "number",
+                    "default": 0.2,
+                    "minimum": 0.1,
+                    "maximum": 60,
+                    "description": "Interval between frames in seconds (min: 0.1s, max: 60s). Examples: 0.2 = one frame every 0.2 seconds, 2 = one frame every 2 seconds. Decimal numbers are supported."
                 },
                 "timelapse.frameRate": {
                     "type": "number",
-                    "default": 2,
-                    "description": "Number of screenshots per second"
+                    "default": 5,
+                    "minimum": 0.1,
+                    "maximum": 30,
+                    "description": "DEPRECATED: Use frameInterval instead. Number of screenshots per second (min: 0.1 fps, max: 30 fps). Example: 5 = five frames per second",
+                    "deprecationMessage": "This setting is deprecated. Please use timelapse.frameInterval instead (frameInterval = 1/frameRate)."
                 },
                 "timelapse.videoFps": {
                     "type": "number",
                     "default": 10,
-                    "description": "Frames per second in the output video"
+                    "minimum": 1,
+                    "maximum": 60,
+                    "description": "Frames per second in the output video (recommended: 10-30)"
                 },
                 "timelapse.quality": {
                     "type": "number",
                     "default": 95,
-                    "description": "Quality of the captured screenshots (1-100)",
+                    "description": "Quality of the captured screenshots (1-100, higher values mean better quality but larger files)",
                     "minimum": 1,
                     "maximum": 100
                 },
@@ -59,27 +80,27 @@
                     "properties": {
                         "x": {
                             "type": "number",
-                            "description": "X coordinate of capture area"
+                            "description": "X coordinate of capture area (pixels from left)"
                         },
                         "y": {
                             "type": "number",
-                            "description": "Y coordinate of capture area"
+                            "description": "Y coordinate of capture area (pixels from top)"
                         },
                         "width": {
                             "type": "number",
-                            "description": "Width of capture area"
+                            "description": "Width of capture area in pixels"
                         },
                         "height": {
                             "type": "number",
-                            "description": "Height of capture area"
+                            "description": "Height of capture area in pixels"
                         }
                     },
-                    "description": "Area of screen to capture (null for full screen)"
+                    "description": "Area of screen to capture (null for full screen). All values should be in pixels."
                 },
                 "timelapse.multiMonitor": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Capture all monitors"
+                    "description": "Capture all monitors instead of just the primary one (thoroughly tested only on Windows)"
                 }
             }
         }
