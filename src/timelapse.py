@@ -211,6 +211,9 @@ class TimelapseRecorder:
         self.is_paused = False
         self.last_window_update = 0
         self.window_update_interval = 0.5  # Update window position every 0.5 seconds
+        self.current_segment = 0  # Track video segments for different resolutions
+        self.current_resolution = None  # Track current resolution
+        self.segments = []  # Store information about video segments
         
         # If capture_ide_only is True and no specific capture area is set, try to get IDE window
         if self.capture_ide_only and not self.capture_area:
@@ -218,6 +221,7 @@ class TimelapseRecorder:
             self.capture_area = get_ide_window()
             if self.capture_area:
                 print(f"INFO:Found VS Code window at {self.capture_area}")
+                self.current_resolution = (self.capture_area['width'], self.capture_area['height'])
             else:
                 print("WARNING:Could not find VS Code window, falling back to full screen capture")
         
@@ -239,6 +243,18 @@ class TimelapseRecorder:
         # Register cleanup function
         atexit.register(self.cleanup)
 
+    def start_new_segment(self):
+        """Start a new video segment when resolution changes"""
+        self.current_segment += 1
+        segment_info = {
+            'start_frame': self.frame_count,
+            'resolution': (self.capture_area['width'], self.capture_area['height']),
+            'frames': []
+        }
+        self.segments.append(segment_info)
+        force_print(f"INFO:Starting new video segment {self.current_segment} with resolution {segment_info['resolution']}")
+        return segment_info
+
     def update_window_position(self):
         """Update the window position and size if we're recording only the IDE"""
         if not self.capture_ide_only:
@@ -252,6 +268,13 @@ class TimelapseRecorder:
         if new_area:
             if new_area != self.capture_area:
                 force_print(f"DEBUG:Window position/size changed: {new_area}")
+                # Check if resolution changed
+                new_resolution = (new_area['width'], new_area['height'])
+                if new_resolution != self.current_resolution:
+                    force_print(f"INFO:Window resolution changed from {self.current_resolution} to {new_resolution}")
+                    self.current_resolution = new_resolution
+                    if self.frame_count > 0:  # Don't create segment for initial resolution
+                        self.start_new_segment()
                 self.capture_area = new_area
         else:
             force_print("WARNING:Lost track of VS Code window")
@@ -281,7 +304,11 @@ class TimelapseRecorder:
         Critical for handling unexpected termination scenarios.
         """
         print("\nINFO:Running cleanup...")
-        print(f"INFO:Captured {self.frame_count} frames")
+        print(f"INFO:Captured {self.frame_count} frames in {len(self.segments)} segments")
+        
+        # Print segment information
+        for i, segment in enumerate(self.segments):
+            print(f"INFO:Segment {i + 1}: {len(segment['frames'])} frames at resolution {segment['resolution']}")
 
     def record(self):
         """
@@ -294,6 +321,10 @@ class TimelapseRecorder:
             force_print(f"DEBUG:Initial capture area: {self.capture_area}")
             force_print(f"DEBUG:Multi-monitor mode: {self.multi_monitor}")
             force_print(f"DEBUG:Record only IDE: {self.capture_ide_only}")
+            
+            # Initialize first segment
+            if self.capture_area:
+                current_segment = self.start_new_segment()
             
             # Initialize screen capture
             with mss.mss() as sct:
@@ -374,8 +405,13 @@ class TimelapseRecorder:
                                 elif frame.shape[2] == 3:
                                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                             
-                            frame_path = os.path.join(self.temp_dir, f'frame_{self.frame_count:06d}.jpg')
+                            # Save frame with segment information
+                            frame_path = os.path.join(self.temp_dir, f'frame_{self.current_segment:02d}_{self.frame_count:06d}.jpg')
                             cv2.imwrite(frame_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+                            
+                            # Add frame to current segment
+                            if self.segments:
+                                self.segments[-1]['frames'].append(frame_path)
                             
                             self.frame_count += 1
                             last_capture = current_time
@@ -399,19 +435,42 @@ class TimelapseRecorder:
 def create_video(frames_dir, output_path, fps):
     """Creates video from captured frames using OpenCV"""
     try:
-        # Get list of frame files
+        # Get list of frame files and sort them by segment and frame number
         frame_files = sorted([f for f in os.listdir(frames_dir) if f.startswith('frame_') and f.endswith('.jpg')])
         if not frame_files:
             print("ERROR:No frames found for video creation")
             return False
 
-        # Get frame dimensions from first frame
-        first_frame = cv2.imread(os.path.join(frames_dir, frame_files[0]))
-        if first_frame is None:
-            print("ERROR:Failed to read first frame")
+        # Group frames by segment
+        segments = {}
+        for frame_file in frame_files:
+            # Extract segment number from filename (frame_SS_NNNNNN.jpg)
+            segment_num = int(frame_file.split('_')[1])
+            if segment_num not in segments:
+                segments[segment_num] = []
+            segments[segment_num].append(frame_file)
+
+        if not segments:
+            print("ERROR:No valid segments found")
             return False
 
-        height, width = first_frame.shape[:2]
+        # Find maximum resolution across all segments
+        max_width = 0
+        max_height = 0
+        for segment_num, segment_frames in sorted(segments.items()):
+            if not segment_frames:
+                continue
+            first_frame = cv2.imread(os.path.join(frames_dir, segment_frames[0]))
+            if first_frame is not None:
+                height, width = first_frame.shape[:2]
+                max_width = max(max_width, width)
+                max_height = max(max_height, height)
+
+        if max_width == 0 or max_height == 0:
+            print("ERROR:Could not determine maximum resolution")
+            return False
+
+        print(f"INFO:Maximum resolution across all segments: {max_width}x{max_height}")
 
         # Get preferred codec from arguments, with fallbacks
         preferred_codec = os.environ.get('TIMELAPSE_CODEC', 'H264')
@@ -421,17 +480,16 @@ def create_video(frames_dir, output_path, fps):
         
         # Start with preferred codec
         if preferred_codec in ['H265', 'AV1', 'H264', 'mp4v', 'XVID', 'MJPG']:
-            # Special handling for H265 and AV1
             if preferred_codec == 'H265':
                 codec_options = [
-                    ('hevc', '.mp4'),  # HEVC codec
-                    ('hvc1', '.mp4'),  # Alternative HEVC FourCC
-                    ('x265', '.mp4')   # x265 implementation
+                    ('hevc', '.mp4'),
+                    ('hvc1', '.mp4'),
+                    ('x265', '.mp4')
                 ]
             elif preferred_codec == 'AV1':
                 codec_options = [
-                    ('av01', '.mp4'),  # AV1 codec
-                    ('aom0', '.mp4')   # Alternative AV1 FourCC
+                    ('av01', '.mp4'),
+                    ('aom0', '.mp4')
                 ]
             else:
                 ext = '.mp4' if preferred_codec in ['H264', 'mp4v'] else '.avi'
@@ -439,7 +497,7 @@ def create_video(frames_dir, output_path, fps):
             
             codecs.extend(codec_options)
         
-        # Add fallback codecs (excluding the preferred one)
+        # Add fallback codecs
         fallback_codecs = [
             ('H264', '.mp4'),
             ('mp4v', '.mp4'),
@@ -451,6 +509,7 @@ def create_video(frames_dir, output_path, fps):
             if codec != preferred_codec:
                 codecs.append((codec, ext))
 
+        # Initialize video writer with maximum resolution
         out = None
         final_path = None
 
@@ -459,16 +518,14 @@ def create_video(frames_dir, output_path, fps):
                 fourcc = cv2.VideoWriter_fourcc(*codec)
                 test_path = output_path.replace('.mp4', ext)
                 
-                # Special parameters for modern codecs
                 if codec in ['hevc', 'hvc1', 'x265', 'av01', 'aom0']:
-                    # Try to use higher quality settings for modern codecs
-                    test_writer = cv2.VideoWriter(test_path, fourcc, fps, (width, height), 
+                    test_writer = cv2.VideoWriter(test_path, fourcc, fps, (max_width, max_height), 
                                                 params=[
-                                                    cv2.VIDEOWRITER_PROP_QUALITY, 100,  # Highest quality
-                                                    cv2.VIDEOWRITER_PROP_BITRATE, 8000000  # 8 Mbps
+                                                    cv2.VIDEOWRITER_PROP_QUALITY, 100,
+                                                    cv2.VIDEOWRITER_PROP_BITRATE, 8000000
                                                 ])
                 else:
-                    test_writer = cv2.VideoWriter(test_path, fourcc, fps, (width, height))
+                    test_writer = cv2.VideoWriter(test_path, fourcc, fps, (max_width, max_height))
                 
                 if test_writer.isOpened():
                     out = test_writer
@@ -482,31 +539,77 @@ def create_video(frames_dir, output_path, fps):
                 continue
 
         if out is None:
-            print("ERROR:Failed to create video writer with any codec")
+            print("ERROR:Failed to create video writer")
             return False
 
-        # Write frames to video directly without color space conversion
-        total_frames = len(frame_files)
-        for i, frame_file in enumerate(frame_files, 1):
-            frame = cv2.imread(os.path.join(frames_dir, frame_file))
-            if frame is not None:
-                # Write frame directly without color conversion
-                out.write(frame)
-                progress = int((i / total_frames) * 100)
-                print(f"PROGRESS:{progress}")
+        # Process all segments
+        total_frames = sum(len(frames) for frames in segments.values())
+        frames_written = 0
+
+        for segment_num, segment_frames in sorted(segments.items()):
+            if not segment_frames:
+                continue
+
+            print(f"\nINFO:Processing segment {segment_num}")
+            
+            # Get segment resolution from first frame
+            first_frame = cv2.imread(os.path.join(frames_dir, segment_frames[0]))
+            if first_frame is None:
+                print(f"WARNING:Skipping segment {segment_num} - could not read first frame")
+                continue
+
+            seg_height, seg_width = first_frame.shape[:2]
+            
+            # Calculate scaling and padding
+            scale = min(max_width / seg_width, max_height / seg_height)
+            scaled_width = int(seg_width * scale)
+            scaled_height = int(seg_height * scale)
+            
+            # Calculate padding to center the frame
+            pad_x = (max_width - scaled_width) // 2
+            pad_y = (max_height - scaled_height) // 2
+            
+            print(f"INFO:Segment resolution: {seg_width}x{seg_height}")
+            if scaled_width != seg_width or scaled_height != seg_height:
+                print(f"INFO:Scaling to: {scaled_width}x{scaled_height} with padding: x={pad_x}, y={pad_y}")
+
+            # Process frames
+            for frame_file in segment_frames:
+                frame = cv2.imread(os.path.join(frames_dir, frame_file))
+                if frame is not None:
+                    # Scale frame if needed
+                    if scaled_width != seg_width or scaled_height != seg_height:
+                        frame = cv2.resize(frame, (scaled_width, scaled_height), interpolation=cv2.INTER_LANCZOS4)
+                    
+                    # Create black canvas of maximum size
+                    canvas = np.zeros((max_height, max_width, 3), dtype=np.uint8)
+                    
+                    # Place scaled frame in center
+                    canvas[pad_y:pad_y + scaled_height, pad_x:pad_x + scaled_width] = frame
+                    
+                    # Write frame
+                    out.write(canvas)
+                    
+                    frames_written += 1
+                    progress = int((frames_written / total_frames) * 100)
+                    print(f"PROGRESS:{progress}")
 
         out.release()
         
         # Verify the video was created
         if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-            print(f"INFO:Video created successfully at {final_path}")
+            print(f"\nINFO:Video created successfully at {final_path}")
+            if final_path != output_path:
+                os.rename(final_path, output_path)
             return True
         else:
             print("ERROR:Video file was not created or is empty")
             return False
-            
+
     except Exception as e:
         print(f"ERROR:Failed to create video: {str(e)}")
+        import traceback
+        print(f"DEBUG:Stack trace: {traceback.format_exc()}")
         return False
 
 def main():
