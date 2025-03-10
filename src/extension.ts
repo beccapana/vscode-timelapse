@@ -26,6 +26,7 @@ interface TimelapseConfig {
         height: number;
     };
     multiMonitor: boolean;
+    captureIDEOnly: boolean;  // New setting for capturing only IDE window
 }
 
 /**
@@ -168,20 +169,24 @@ class TimelapseRecorder {
 
         const args = [
             scriptPath,
-            this.currentOutputDir!,
-            (1 / config.frameInterval).toString(),  // Convert interval to rate for backward compatibility
-            config.videoFps.toString(),
-            config.quality.toString(),
-            '--codec',
-            config.videoCodec  // Pass codec to Python script
+            'record',
+            '--output-dir', this.currentOutputDir!,
+            '--temp-dir', path.join(this.currentOutputDir!, 'temp'),
+            '--frame-interval', config.frameInterval.toString(),
+            '--video-fps', config.videoFps.toString(),
+            '--quality', config.quality.toString()
         ];
 
         if (config.captureArea) {
-            args.push(JSON.stringify(config.captureArea));
+            args.push('--capture-area', JSON.stringify(config.captureArea));
         }
 
         if (config.multiMonitor) {
             args.push('--multi-monitor');
+        }
+
+        if (config.captureIDEOnly) {
+            args.push('--record-only-ide');
         }
 
         const env = { ...process.env, pythonIoEncoding: 'utf-8' };
@@ -419,10 +424,10 @@ class TimelapseRecorder {
                 return new Promise((resolve) => {
                     const pythonProcess = spawn(pythonPath, [
                         scriptPath,
-                        '--create-video',
-                        framesDir,
-                        outputPath,
-                        fps.toString()
+                        'create-video',
+                        '--frames-dir', framesDir,
+                        '--output-path', outputPath,
+                        '--fps', fps.toString()
                     ]);
 
                     pythonProcess.stdout?.on('data', (data) => {
@@ -767,7 +772,8 @@ class TimelapseRecorder {
             quality: config.get<number>('quality', 95),
             videoCodec: config.get<string>('videoCodec', 'H264'),  // Get codec from settings
             captureArea: config.get('captureArea'),
-            multiMonitor: config.get<boolean>('multiMonitor', false)
+            multiMonitor: config.get<boolean>('multiMonitor', false),
+            captureIDEOnly: config.get<boolean>('captureIDEOnly', false)  // Changed default to true
         };
     }
 }

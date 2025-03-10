@@ -8,15 +8,189 @@ import time
 import signal
 import atexit
 import platform
+import argparse
 from datetime import datetime
 import mss
 import cv2
 import numpy as np
 
+# Import window handling libraries based on platform
+if platform.system() == 'Windows':
+    import win32gui
+    import win32con
+    import win32api
+elif platform.system() == 'Darwin':
+    from AppKit import NSWorkspace
+else:
+    import Xlib.display
+    import Xlib.X
+
 # Add debug logging for MacOS
 IS_MACOS = platform.system() == 'Darwin'
 def debug_log(message):
     print(f"DEBUG:{message}")
+
+def force_print(message):
+    """Print message and flush stdout immediately"""
+    print(message)
+    sys.stdout.flush()
+
+def get_ide_window():
+    """Get the IDE window coordinates based on the platform"""
+    if platform.system() == 'Windows':
+        try:
+            # Try to get the foreground window first
+            hwnd = win32gui.GetForegroundWindow()
+            title = win32gui.GetWindowText(hwnd)
+            force_print(f"DEBUG:Active window: '{title}'")
+            
+            # If the active window is not VS Code, enumerate all windows
+            if not any(ide_name in title for ide_name in ['Visual Studio Code', 'VS Code', 'Code']):
+                def callback(hwnd, windows):
+                    if win32gui.IsWindowVisible(hwnd):
+                        title = win32gui.GetWindowText(hwnd)
+                        if any(ide_name in title for ide_name in ['Visual Studio Code', 'VS Code', 'Code']):
+                            windows.append(hwnd)
+                    return True
+
+                windows = []
+                win32gui.EnumWindows(callback, windows)
+                
+                if not windows:
+                    force_print("WARNING:No VS Code window found")
+                    return None
+                    
+                force_print(f"DEBUG:Found {len(windows)} VS Code windows")
+                hwnd = windows[0]
+                title = win32gui.GetWindowText(hwnd)
+            
+            force_print(f"DEBUG:Using window: '{title}'")
+            
+            # Get window placement info
+            placement = win32gui.GetWindowPlacement(hwnd)
+            force_print(f"DEBUG:Window placement: {placement}")
+            
+            # Check if window is minimized
+            if placement[1] == win32con.SW_SHOWMINIMIZED:
+                force_print("INFO:Window is minimized, restoring...")
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                time.sleep(0.5)  # Give window time to restore
+            
+            # Get window coordinates
+            rect = win32gui.GetWindowRect(hwnd)
+            force_print(f"DEBUG:Window rect: {rect}")
+            
+            # Get window styles
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            
+            # Check if window is maximized
+            is_maximized = style & win32con.WS_MAXIMIZE
+            force_print(f"DEBUG:Window is maximized: {bool(is_maximized)}")
+            
+            # Get DPI for the window
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                user32.SetProcessDPIAware()
+                dpi = user32.GetDpiForWindow(hwnd) if hasattr(user32, 'GetDpiForWindow') else 96
+                dpi_scale = dpi / 96.0
+                force_print(f"DEBUG:Window DPI: {dpi} (scale: {dpi_scale})")
+            except Exception as e:
+                force_print(f"WARNING:Failed to get DPI, using default: {e}")
+                dpi_scale = 1.0
+            
+            # Calculate borders based on window style
+            border_width = 0
+            title_height = 0
+            
+            if not is_maximized:
+                if style & win32con.WS_BORDER:
+                    border_width += int(1 * dpi_scale)
+                if style & win32con.WS_THICKFRAME:
+                    border_width += int(4 * dpi_scale)
+                if style & win32con.WS_CAPTION:
+                    title_height += int(24 * dpi_scale)
+                if ex_style & win32con.WS_EX_WINDOWEDGE:
+                    border_width += int(2 * dpi_scale)
+            else:
+                # For maximized windows, we need to account for the invisible borders
+                border_width = int(8 * dpi_scale)  # Windows 10/11 invisible border
+                title_height = int(8 * dpi_scale)  # Top invisible border
+            
+            force_print(f"DEBUG:Calculated borders - width: {border_width}, title height: {title_height}")
+            
+            # Calculate client area
+            x = rect[0] + border_width
+            y = rect[1] + title_height
+            width = rect[2] - rect[0] - (border_width * 2)
+            height = rect[3] - rect[1] - title_height - border_width
+            
+            # Ensure coordinates are within screen bounds
+            screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+            screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+            force_print(f"DEBUG:Screen dimensions: {screen_width}x{screen_height}")
+            
+            # For maximized windows, adjust coordinates to screen bounds
+            if is_maximized:
+                x = 0
+                y = 0
+                width = screen_width
+                height = screen_height - title_height  # Leave space for title bar
+            else:
+                x = max(0, min(x, screen_width - 1))
+                y = max(0, min(y, screen_height - 1))
+                width = max(1, min(width, screen_width - x))
+                height = max(1, min(height, screen_height - y))
+            
+            window_info = {
+                'x': x,
+                'y': y,
+                'width': width,
+                'height': height
+            }
+            force_print(f"DEBUG:Final window info: {window_info}")
+            return window_info
+            
+        except Exception as e:
+            force_print(f"WARNING:Error getting window coordinates: {e}")
+            import traceback
+            force_print(f"DEBUG:Stack trace: {traceback.format_exc()}")
+            return None
+
+    elif platform.system() == 'Darwin':
+        workspace = NSWorkspace.sharedWorkspace()
+        for window in workspace.runningApplications():
+            if 'Code' in window.localizedName():
+                frame = window.frame()
+                return {
+                    'x': int(frame.origin.x),
+                    'y': int(frame.origin.y),
+                    'width': int(frame.size.width),
+                    'height': int(frame.size.height)
+                }
+        return None
+
+    else:  # Linux
+        display = Xlib.display.Display()
+        root = display.screen().root
+        window_ids = root.get_full_property(
+            display.intern_atom('_NET_CLIENT_LIST'),
+            Xlib.X.AnyPropertyType
+        ).value
+
+        for window_id in window_ids:
+            window = display.create_resource_object('window', window_id)
+            name = window.get_wm_name()
+            if name and 'Visual Studio Code' in name:
+                geometry = window.get_geometry()
+                return {
+                    'x': geometry.x,
+                    'y': geometry.y,
+                    'width': geometry.width,
+                    'height': geometry.height
+                }
+        return None
 
 class TimelapseRecorder:
     """
@@ -24,16 +198,28 @@ class TimelapseRecorder:
     Handles screen capture, frame saving, and video creation.
     Uses a file-based approach for control (stop/pause) to ensure reliability across platforms.
     """
-    def __init__(self, output_dir, frame_rate, video_fps, quality, capture_area=None, multi_monitor=False):
+    def __init__(self, output_dir, frame_rate, video_fps, quality, capture_area=None, multi_monitor=False, capture_ide_only=False):
         self.output_dir = output_dir
         self.frame_rate = frame_rate
         self.video_fps = video_fps
         self.quality = quality
         self.capture_area = capture_area
         self.multi_monitor = multi_monitor
+        self.capture_ide_only = capture_ide_only
         self.frame_count = 0
         self.should_stop = False
         self.is_paused = False
+        self.last_window_update = 0
+        self.window_update_interval = 0.5  # Update window position every 0.5 seconds
+        
+        # If capture_ide_only is True and no specific capture area is set, try to get IDE window
+        if self.capture_ide_only and not self.capture_area:
+            print("INFO:Attempting to locate VS Code window...")
+            self.capture_area = get_ide_window()
+            if self.capture_area:
+                print(f"INFO:Found VS Code window at {self.capture_area}")
+            else:
+                print("WARNING:Could not find VS Code window, falling back to full screen capture")
         
         # Create directory for temporary frame storage
         self.temp_dir = os.path.join(output_dir, 'temp')
@@ -52,6 +238,25 @@ class TimelapseRecorder:
         
         # Register cleanup function
         atexit.register(self.cleanup)
+
+    def update_window_position(self):
+        """Update the window position and size if we're recording only the IDE"""
+        if not self.capture_ide_only:
+            return
+            
+        current_time = time.time()
+        if current_time - self.last_window_update < self.window_update_interval:
+            return
+            
+        new_area = get_ide_window()
+        if new_area:
+            if new_area != self.capture_area:
+                force_print(f"DEBUG:Window position/size changed: {new_area}")
+                self.capture_area = new_area
+        else:
+            force_print("WARNING:Lost track of VS Code window")
+        
+        self.last_window_update = current_time
 
     def handle_stop(self, signum, frame):
         """Signal handler for stop signals"""
@@ -76,11 +281,7 @@ class TimelapseRecorder:
         Critical for handling unexpected termination scenarios.
         """
         print("\nINFO:Running cleanup...")
-        
-        # Create final video if frames were captured
-        if self.frame_count > 0:
-            print("\nINFO:Creating final video...")
-            create_video(self.temp_dir, self.output_dir, self.video_fps)
+        print(f"INFO:Captured {self.frame_count} frames")
 
     def record(self):
         """
@@ -89,91 +290,110 @@ class TimelapseRecorder:
         Uses mss for efficient screen capture.
         """
         try:
+            force_print("\nINFO:Starting recording process")
+            force_print(f"DEBUG:Initial capture area: {self.capture_area}")
+            force_print(f"DEBUG:Multi-monitor mode: {self.multi_monitor}")
+            force_print(f"DEBUG:Record only IDE: {self.capture_ide_only}")
+            
             # Initialize screen capture
             with mss.mss() as sct:
-                if IS_MACOS:
-                    debug_log(f"Available monitors: {sct.monitors}")
-                    debug_log(f"Primary monitor: {sct.monitors[0]}")
-                    debug_log(f"Using multi_monitor: {self.multi_monitor}")
-                    debug_log(f"Capture area: {self.capture_area}")
-
-                monitor = sct.monitors[0] if not self.multi_monitor else None
-                if self.capture_area:
-                    monitor = self.capture_area
-
-                if IS_MACOS:
-                    debug_log(f"Selected monitor configuration: {monitor}")
-
+                force_print("\nDEBUG:MSS Configuration:")
+                force_print(f"DEBUG:Available monitors: {json.dumps(sct.monitors, indent=2)}")
+                force_print(f"DEBUG:Primary monitor: {json.dumps(sct.monitors[1], indent=2)}")  # monitors[1] is primary
+                
+                # Get primary monitor bounds
+                primary_monitor = sct.monitors[1]
+                force_print(f"DEBUG:Primary monitor bounds: {json.dumps(primary_monitor, indent=2)}")
+                
                 last_capture = 0
                 capture_interval = 1.0 / self.frame_rate
 
-                print(f"INFO:Starting capture with frame rate {self.frame_rate} fps")
-                print(f"INFO:Saving frames to {self.temp_dir}")
+                force_print(f"\nINFO:Starting capture with frame rate {self.frame_rate} fps")
+                force_print(f"INFO:Saving frames to {self.temp_dir}")
 
                 while not self.should_stop:
                     try:
-                        # Check both signal-based and file-based pause states
                         if platform.system() == 'Windows':
                             self.is_paused = self.check_pause_file()
                         
                         if self.is_paused:
-                            time.sleep(0.1)  # Small delay while paused to reduce CPU usage
+                            time.sleep(0.1)
                             continue
 
+                        # Update window position if needed
+                        self.update_window_position()
+                        
                         current_time = time.time()
                         if current_time - last_capture >= capture_interval:
-                            # Capture and save frame
-                            if IS_MACOS:
-                                debug_log("Attempting to capture frame...")
+                            # Set up monitor configuration
+                            monitor = primary_monitor if not self.multi_monitor else sct.monitors[0]
+                            if self.capture_area:
+                                # Convert our coordinates to mss format
+                                monitor = {
+                                    'left': int(self.capture_area['x']),
+                                    'top': int(self.capture_area['y']),
+                                    'width': int(self.capture_area['width']),
+                                    'height': int(self.capture_area['height']),
+                                    'mon': 1,  # Use primary monitor as reference
+                                }
+                                
+                                # Validate capture area
+                                if monitor['width'] <= 0 or monitor['height'] <= 0:
+                                    force_print(f"WARNING:Invalid capture area dimensions: {monitor}")
+                                    continue
+                                if monitor['left'] < 0 or monitor['top'] < 0:
+                                    force_print(f"WARNING:Invalid capture area position: {monitor}")
+                                    continue
+                                
+                                # Check if the capture area is within the primary monitor bounds
+                                if (monitor['left'] + monitor['width'] > primary_monitor['width'] or
+                                    monitor['top'] + monitor['height'] > primary_monitor['height']):
+                                    force_print("WARNING:Capture area extends beyond primary monitor bounds, adjusting...")
+                                    monitor['width'] = min(monitor['width'], primary_monitor['width'] - monitor['left'])
+                                    monitor['height'] = min(monitor['height'], primary_monitor['height'] - monitor['top'])
+
+                            try:
+                                screenshot = sct.grab(monitor)
+                                if self.frame_count == 0:  # Log only for first frame
+                                    force_print(f"\nDEBUG:First frame capture:")
+                                    force_print(f"DEBUG:Captured frame size: {screenshot.width}x{screenshot.height}")
+                                    force_print(f"DEBUG:Monitor used: {json.dumps(monitor, indent=2)}")
+                                    force_print(f"DEBUG:Screenshot bounds: left={screenshot.left}, top={screenshot.top}, width={screenshot.width}, height={screenshot.height}")
+                            except Exception as e:
+                                force_print(f"ERROR:Failed to capture frame: {str(e)}")
+                                force_print(f"DEBUG:Monitor config used: {json.dumps(monitor, indent=2)}")
+                                continue  # Skip this frame and try again
                             
-                            screenshot = sct.grab(monitor)
-                            
-                            if IS_MACOS:
-                                debug_log(f"Frame captured. Size: {screenshot.width}x{screenshot.height}")
-                            
-                            # Convert to numpy array and handle color channels
                             frame = np.array(screenshot, dtype=np.uint8)
+                            if self.frame_count == 0:  # Log only for first frame
+                                force_print(f"DEBUG:Frame array shape: {frame.shape}")
                             
-                            if IS_MACOS:
-                                debug_log(f"Frame shape before conversion: {frame.shape}")
-                                debug_log(f"Frame data type: {frame.dtype}")
-                            
-                            # MSS captures in BGRA format, we need RGB for correct colors
                             if len(frame.shape) == 3:
                                 if frame.shape[2] == 4:
-                                    # Convert BGRA to RGB
                                     frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
                                 elif frame.shape[2] == 3:
-                                    # Convert BGR to RGB
                                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                             
-                            if IS_MACOS:
-                                debug_log(f"Frame shape after conversion: {frame.shape}")
-                            
-                            # Save frame with quality setting
                             frame_path = os.path.join(self.temp_dir, f'frame_{self.frame_count:06d}.jpg')
                             cv2.imwrite(frame_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, self.quality])
-                            
-                            if IS_MACOS:
-                                debug_log(f"Frame saved to {frame_path}")
                             
                             self.frame_count += 1
                             last_capture = current_time
 
-                            # Progress logging
                             if self.frame_count % 10 == 0:
-                                print(f"INFO:Captured {self.frame_count} frames")
+                                force_print(f"INFO:Captured {self.frame_count} frames")
                     except Exception as e:
-                        if IS_MACOS:
-                            debug_log(f"Error during frame capture: {str(e)}")
-                        raise
+                        force_print(f"ERROR:Frame capture error: {str(e)}")
+                        import traceback
+                        force_print(f"DEBUG:Stack trace: {traceback.format_exc()}")
+                        continue  # Skip this frame and try again
 
-            print("\nINFO:Recording stopped")
+                force_print("\nINFO:Recording stopped")
 
         except Exception as e:
-            print(f"ERROR:{str(e)}")
-            if IS_MACOS:
-                debug_log(f"Stack trace: {sys.exc_info()}")
+            force_print(f"ERROR:{str(e)}")
+            import traceback
+            force_print(f"DEBUG:Stack trace: {traceback.format_exc()}")
             sys.exit(1)
 
 def create_video(frames_dir, output_path, fps):
@@ -290,53 +510,62 @@ def create_video(frames_dir, output_path, fps):
         return False
 
 def main():
-    """Main function handling command line arguments and program flow"""
-    if len(sys.argv) > 1 and sys.argv[1] == '--create-video':
-        if len(sys.argv) < 5:
-            print("ERROR:Not enough arguments for video creation")
-            print("Usage: timelapse.py --create-video <frames_dir> <output_path> <fps>")
-            sys.exit(1)
+    """Main entry point for the script"""
+    parser = argparse.ArgumentParser(description='VS Code Timelapse Recording Script')
+    
+    # Add subparsers for different modes
+    subparsers = parser.add_subparsers(dest='mode', help='Operation mode')
+    
+    # Record mode parser
+    record_parser = subparsers.add_parser('record', help='Record timelapse')
+    record_parser.add_argument('--output-dir', required=True, help='Directory for final video output')
+    record_parser.add_argument('--temp-dir', required=True, help='Directory for temporary frame storage')
+    record_parser.add_argument('--frame-interval', type=float, default=0.2, help='Interval between frames in seconds')
+    record_parser.add_argument('--video-fps', type=int, default=10, help='FPS for output video')
+    record_parser.add_argument('--quality', type=int, default=95, help='JPEG quality for frames (1-100)')
+    record_parser.add_argument('--capture-area', type=str, help='JSON string defining capture area')
+    record_parser.add_argument('--multi-monitor', action='store_true', help='Capture all monitors')
+    record_parser.add_argument('--record-only-ide', action='store_true', default=False, help='Record only VS Code window')
+    
+    # Create video mode parser
+    video_parser = subparsers.add_parser('create-video', help='Create video from frames')
+    video_parser.add_argument('--frames-dir', required=True, help='Directory containing frame images')
+    video_parser.add_argument('--output-path', required=True, help='Path for output video file')
+    video_parser.add_argument('--fps', type=int, required=True, help='Frames per second for output video')
+
+    try:
+        args = parser.parse_args()
         
-        frames_dir = sys.argv[2]
-        output_path = sys.argv[3]
-        fps = int(sys.argv[4])
-        
-        success = create_video(frames_dir, output_path, fps)
-        sys.exit(0 if success else 1)
+        if args.mode == 'record':
+            # Parse capture area if provided
+            capture_area = None
+            if args.capture_area:
+                try:
+                    capture_area = json.loads(args.capture_area)
+                except json.JSONDecodeError:
+                    print("ERROR:Invalid capture area format")
+                    sys.exit(1)
 
-    if len(sys.argv) < 5:
-        print("ERROR:Not enough arguments")
-        print("Usage: timelapse.py <output_dir> <frame_rate> <video_fps> <quality> [--codec CODEC] [capture_area_json] [--multi-monitor]")
-        sys.exit(1)
-
-    output_dir = sys.argv[1]
-    frame_rate = float(sys.argv[2])
-    video_fps = int(sys.argv[3])
-    quality = int(sys.argv[4])
-
-    # Initialize variables with default values
-    capture_area = None
-    multi_monitor = False
-
-    # Parse additional arguments
-    i = 5
-    while i < len(sys.argv):
-        if sys.argv[i] == '--codec' and i + 1 < len(sys.argv):
-            os.environ['TIMELAPSE_CODEC'] = sys.argv[i + 1]
-            i += 2
-        elif sys.argv[i] == '--multi-monitor':
-            multi_monitor = True
-            i += 1
+            recorder = TimelapseRecorder(
+                output_dir=args.output_dir,
+                frame_rate=1.0 / args.frame_interval,  # Convert interval to rate
+                video_fps=args.video_fps,
+                quality=args.quality,
+                capture_area=capture_area,
+                multi_monitor=args.multi_monitor,
+                capture_ide_only=args.record_only_ide
+            )
+            recorder.record()
+        elif args.mode == 'create-video':
+            success = create_video(args.frames_dir, args.output_path, args.fps)
+            sys.exit(0 if success else 1)
         else:
-            try:
-                capture_area = json.loads(sys.argv[i])
-                i += 1
-            except json.JSONDecodeError:
-                print("ERROR:Invalid capture area JSON")
-                sys.exit(1)
+            parser.print_help()
+            sys.exit(1)
 
-    recorder = TimelapseRecorder(output_dir, frame_rate, video_fps, quality, capture_area, multi_monitor)
-    recorder.record()
+    except Exception as e:
+        print(f"ERROR:{str(e)}")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()

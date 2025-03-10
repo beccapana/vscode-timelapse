@@ -115,6 +115,11 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Capture all monitors instead of just the primary one (thoroughly tested only on Windows)"
+                },
+                "timelapse.captureIDEOnly": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Capture only the VS Code window instead of the entire screen"
                 }
             }
         }
